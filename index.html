@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Space Knowledge Shooter</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.umd.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        #hud {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; color: white; text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        }
+        #question-box {
+            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+            background: rgba(0, 0, 50, 0.7); padding: 15px 30px; border: 2px solid #00d4ff;
+            border-radius: 10px; text-align: center; max-width: 80%; pointer-events: auto;
+        }
+        #stats { position: absolute; bottom: 20px; left: 20px; font-size: 1.2rem; }
+        #crosshair {
+            position: absolute; top: 50%; left: 50%; width: 30px; height: 30px;
+            border: 2px solid rgba(0, 212, 255, 0.5); border-radius: 50%;
+            transform: translate(-50%, -50%);
+        }
+        #crosshair::after {
+            content: ''; position: absolute; top: 50%; left: 50%;
+            width: 4px; height: 4px; background: red; border-radius: 50%;
+            transform: translate(-50%, -50%);
+        }
+    </style>
+</head>
+<body>
+
+<div id="hud">
+    <div id="question-box">
+        <div id="question-text">Загрузка миссии...</div>
+    </div>
+    <div id="stats">Цель: <span id="current-task">0</span>/<span id="total-tasks">0</span> | Очки: <span id="score">0</span></div>
+    <div id="crosshair"></div>
+</div>
+
+<script>
+/** * НАСТРОЙКИ (будут передаваться из редактора)
+ */
+const gameConfig = {
+    speed: 0.005,           // Скорость вращения тарелок
+    hitboxRadius: 2,       // Размер НЛО
+    targetSkin: 'ufo',     // Скин (пока зарезервировано)
+    primaryColor: '#00d4ff',
+    questions: [
+        { q: "Сколько планет в Солнечной системе?", a: ["7", "8", "9", "10"], correct: 1 },
+        { q: "Решите уравнение: $x + 5 = 12$", a: ["5", "6", "7", "8"], correct: 2 },
+        { q: "Ближайшая к нам звезда?", a: ["Сириус", "Проксима Центавра", "Вега"], correct: 1 }
+    ]
+};
+
+let scene, camera, renderer, raycaster;
+let targets = [];
+let currentLevel = 0;
+let score = 0;
+const mouse = new THREE.Vector2();
+
+function init() {
+    scene = new THREE.Scene();
+    // Фон: Звездное небо
+    scene.background = new THREE.Color(0x000005);
+    
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    raycaster = new THREE.Raycaster();
+
+    // Освещение
+    const light = new THREE.PointLight(0xffffff, 1, 100);
+    light.position.set(0, 0, 0);
+    scene.add(light);
+    scene.add(new THREE.AmbientLight(0x404040));
+
+    window.addEventListener('mousedown', onShoot);
+    window.addEventListener('mousemove', onMouseMove);
+    
+    loadLevel();
+    animate();
+}
+
+function loadLevel() {
+    // Очистка старых целей
+    targets.forEach(t => scene.remove(t.mesh));
+    targets = [];
+
+    const data = gameConfig.questions[currentLevel];
+    document.getElementById('question-text').innerText = data.q;
+    document.getElementById('current-task').innerText = currentLevel + 1;
+    document.getElementById('total-tasks').innerText = gameConfig.questions.length;
+
+    // Спавн НЛО вокруг игрока
+    data.a.forEach((text, index) => {
+        const phi = Math.acos(-1 + (2 * index) / data.a.length);
+        const theta = Math.sqrt(data.a.length * Math.PI) * phi;
+        
+        const mesh = createUFO(text);
+        const dist = 15;
+        mesh.position.set(
+            dist * Math.cos(theta) * Math.sin(phi),
+            dist * Math.sin(theta) * Math.sin(phi),
+            dist * Math.cos(phi)
+        );
+        
+        scene.add(mesh);
+        targets.push({ mesh, isCorrect: index === data.correct });
+    });
+}
+
+function createUFO(label) {
+    const group = new THREE.Group();
+    
+    // Геометрия тарелки
+    const geo = new THREE.CylinderGeometry(2, 2, 0.5, 32);
+    const mat = new THREE.MeshPhongMaterial({ color: 0x888888, emissive: 0x111111 });
+    const ufo = new THREE.Mesh(geo, mat);
+    group.add(ufo);
+
+    // Добавляем текст (упрощенно через Canvas-текстуру)
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = 256; canvas.height = 128;
+    ctx.fillStyle = 'white';
+    ctx.font = 'Bold 40px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, 128, 70);
+    
+    const texture = new THREE.CanvasTexture(canvas);
+    const spriteMat = new THREE.SpriteMaterial({ map: texture });
+    const sprite = new THREE.Sprite(spriteMat);
+    sprite.scale.set(4, 2, 1);
+    sprite.position.y = 1.5;
+    group.add(sprite);
+
+    return group;
+}
+
+function onMouseMove(event) {
+    // Вращение камеры мышью
+    const factor = 0.002;
+    camera.rotation.y -= event.movementX * factor;
+    camera.rotation.x -= event.movementY * factor;
+}
+
+function onShoot(event) {
+    // Центр экрана (прицел)
+    raycaster.setFromCamera(new THREE.Vector2(0,0), camera);
+    const intersects = raycaster.intersectObjects(targets.map(t => t.mesh), true);
+
+    if (intersects.length > 0) {
+        const hitMesh = intersects[0].object.parent; 
+        const targetData = targets.find(t => t.mesh === hitMesh);
+
+        if (targetData.isCorrect) {
+            handleSuccess(hitMesh);
+        } else {
+            handleError(hitMesh);
+        }
+    }
+}
+
+function handleSuccess(mesh) {
+    score += 100;
+    document.getElementById('score').innerText = score;
+    // Эффект взрыва (простое удаление для начала)
+    scene.remove(mesh);
+    
+    setTimeout(() => {
+        currentLevel++;
+        if (currentLevel < gameConfig.questions.length) {
+            loadLevel();
+        } else {
+            alert("Миссия выполнена! Очки: " + score);
+        }
+    }, 1000);
+}
+
+function handleError(mesh) {
+    // Визуальный отклик на ошибку
+    mesh.children[0].material.emissive.setHex(0xff0000);
+    setTimeout(() => mesh.children[0].material.emissive.setHex(0x111111), 500);
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+    TWEEN.update();
+    
+    // Вращение тарелок вокруг центра
+    targets.forEach((t, i) => {
+        const time = Date.now() * gameConfig.speed;
+        t.mesh.position.x += Math.sin(time + i) * 0.02;
+        t.mesh.position.y += Math.cos(time + i) * 0.02;
+        t.mesh.lookAt(0,0,0);
+    });
+
+    renderer.render(scene, camera);
+}
+
+init();
+
+// Запрос на блокировку указателя для управления как в FPS
+document.body.onclick = () => document.body.requestPointerLock();
+</script>
+</body>
+</html>
