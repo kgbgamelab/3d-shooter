@@ -3,165 +3,185 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Space Mission 360</title>
+    <title>Space Shooter Pro 360</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', monospace; }
         #hud { position: absolute; width: 100%; height: 100%; pointer-events: none; }
         #question-ui {
-            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
-            background: rgba(0, 20, 50, 0.8); border: 2px solid #00f2ff;
-            padding: 20px; border-radius: 15px; color: white; text-align: center;
-            min-width: 300px; box-shadow: 0 0 20px #00f2ff66;
+            position: absolute; top: 30px; left: 50%; transform: translateX(-50%);
+            background: rgba(0, 10, 30, 0.85); border: 2px solid #00f2ff;
+            padding: 15px 40px; border-radius: 5px; color: white; text-align: center;
+            box-shadow: 0 0 15px #00f2ff;
         }
         #crosshair {
-            position: absolute; top: 50%; left: 50%; width: 40px; height: 40px;
-            border: 2px solid #00f2ff; border-radius: 50%; transform: translate(-50%, -50%);
+            position: absolute; top: 50%; left: 50%; width: 20px; height: 20px;
+            border: 1px solid rgba(0, 242, 255, 0.7); transform: translate(-50%, -50%);
         }
-        #crosshair::before { content: ''; position: absolute; top: 50%; left: 50%; width: 2px; height: 10px; background: #00f2ff; transform: translate(-50%, -50%); }
-        #crosshair::after { content: ''; position: absolute; top: 50%; left: 50%; width: 10px; height: 2px; background: #00f2ff; transform: translate(-50%, -50%); }
     </style>
 </head>
 <body>
 
 <div id="hud">
     <div id="question-ui">
-        <div style="font-size: 0.8em; color: #00f2ff;">МИССИЯ: ВОПРОС <span id="q-num">1</span></div>
-        <div id="q-text" style="font-size: 1.4em; margin-top: 5px;">Загрузка...</div>
+        <div id="q-text" style="font-size: 1.5em; font-weight: bold;">МИССИЯ ЗАГРУЖАЕТСЯ...</div>
     </div>
     <div id="crosshair"></div>
 </div>
 
 <script>
+let scene, camera, renderer, gun, currentQ = 0;
+let targets = [];
+let move = { fwd: false, bwd: false, left: false, right: false };
 const config = {
     questions: [
-        { q: "Сколько планет в Солнечной системе?", a: ["7", "8", "9", "6"], c: 1 },
-        { q: "Какая планета красная?", a: ["Венера", "Марс", "Юпитер"], c: 1 },
-        { q: "2 + 2 * 2 = ?", a: ["8", "6", "4"], c: 1 }
+        { q: "Сколько планет в Солнечной системе?", a: ["7", "8", "9"], c: 1 },
+        { q: "Столица Марса в фантастике?", a: ["Кидония", "Олимпус", "Элизиум"], c: 0 }
     ]
 };
 
-let scene, camera, renderer, currentQ = 0, targets = [];
+// Звуковая система
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-
-function playSound(type) {
+function playLaserSound() {
     const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.connect(gain); gain.connect(audioCtx.destination);
-    
-    if(type === 'shoot') {
-        osc.type = 'triangle'; osc.frequency.setValueAtTime(800, audioCtx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(10, audioCtx.currentTime + 0.1);
-        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
-        gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.1);
-    } else if(type === 'win') {
-        osc.type = 'sine'; osc.frequency.setValueAtTime(400, audioCtx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(800, audioCtx.currentTime + 0.2);
-        gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.3);
-    }
-    osc.start(); osc.stop(audioCtx.currentTime + 0.3);
+    const g = audioCtx.createGain();
+    osc.connect(g); g.connect(audioCtx.destination);
+    osc.frequency.setValueAtTime(1200, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(50, audioCtx.currentTime + 0.2);
+    g.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.2);
+    osc.start(); osc.stop(audioCtx.currentTime + 0.2);
 }
 
 function init() {
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+    
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(renderer.domElement);
 
-    // Звездное небо
-    const starGeo = new THREE.BufferGeometry();
-    const starCoords = [];
-    for(let i=0; i<5000; i++) {
-        starCoords.push((Math.random()-0.5)*1000, (Math.random()-0.5)*1000, (Math.random()-0.5)*1000);
-    }
-    starGeo.setAttribute('position', new THREE.Float32BufferAttribute(starCoords, 3));
-    const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.7 });
-    scene.add(new THREE.Points(starGeo, starMat));
+    // Звезды
+    const stars = new THREE.BufferGeometry();
+    const pos = [];
+    for(let i=0; i<8000; i++) pos.push((Math.random()-0.5)*800, (Math.random()-0.5)*800, (Math.random()-0.5)*800);
+    stars.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    scene.add(new THREE.Points(stars, new THREE.PointsMaterial({color: 0xffffff, size: 0.5})));
 
     // Свет
-    scene.add(new THREE.AmbientLight(0x404040, 2));
-    const sun = new THREE.DirectionalLight(0xffffff, 1);
-    sun.position.set(5, 5, 5);
-    scene.add(sun);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+    const pointLight = new THREE.PointLight(0x00f2ff, 1, 100);
+    scene.add(pointLight);
 
+    // Создание пистолета
+    createGun();
+
+    // События
+    window.addEventListener('keydown', e => handleKeys(e.code, true));
+    window.addEventListener('keyup', e => handleKeys(e.code, false));
     window.addEventListener('mousedown', shoot);
-    window.addEventListener('mousemove', e => {
-        if (document.pointerLockElement) {
-            camera.rotation.y -= e.movementX * 0.002;
-            camera.rotation.x -= e.movementY * 0.002;
-        }
-    });
+    window.addEventListener('mousemove', onMouseMove);
 
     loadQuestion();
     animate();
 }
 
+function createGun() {
+    gun = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.3, 1), new THREE.MeshPhongMaterial({color: 0x222222}));
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.8), new THREE.MeshPhongMaterial({color: 0x444444}));
+    barrel.rotation.x = Math.PI/2; barrel.position.z = -0.6;
+    const glow = new THREE.Mesh(new THREE.BoxGeometry(0.21, 0.1, 0.4), new THREE.MeshBasicMaterial({color: 0x00f2ff}));
+    glow.position.y = 0.1;
+    gun.add(body, barrel, glow);
+    scene.add(gun);
+}
+
+function handleKeys(code, isPressed) {
+    if(code === 'KeyW') move.fwd = isPressed;
+    if(code === 'KeyS') move.bwd = isPressed;
+    if(code === 'KeyA') move.left = isPressed;
+    if(code === 'KeyD') move.right = isPressed;
+}
+
+function onMouseMove(e) {
+    if (document.pointerLockElement) {
+        camera.rotation.y -= e.movementX * 0.002;
+        // Ограничение наклона вверх-вниз (Pitch)
+        let newX = camera.rotation.x - e.movementY * 0.002;
+        camera.rotation.x = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, newX));
+    }
+}
+
 function createUFO(text) {
     const group = new THREE.Group();
-    
-    // Корпус НЛО
-    const body = new THREE.Mesh(
-        new THREE.CylinderGeometry(1.5, 1.5, 0.4, 32),
-        new THREE.MeshPhongMaterial({ color: 0x555555, shininess: 100 })
-    );
-    const dome = new THREE.Mesh(
-        new THREE.SphereGeometry(0.7, 32, 32, 0, Math.PI*2, 0, Math.PI/2),
-        new THREE.MeshPhongMaterial({ color: 0x00d4ff, transparent: true, opacity: 0.6 })
-    );
+    const body = new THREE.Mesh(new THREE.SphereGeometry(1.2, 32, 8), new THREE.MeshPhongMaterial({color: 0x666666}));
+    body.scale.y = 0.3;
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(0.5, 32, 32), new THREE.MeshPhongMaterial({color: 0x00f2ff, transparent: true, opacity: 0.5}));
     dome.position.y = 0.2;
     group.add(body, dome);
 
-    // Текст
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     canvas.width = 256; canvas.height = 128;
-    ctx.fillStyle = '#00f2ff'; ctx.font = 'bold 50px Arial'; ctx.textAlign = 'center';
+    ctx.fillStyle = '#00f2ff'; ctx.font = 'bold 44px Arial'; ctx.textAlign = 'center';
     ctx.fillText(text, 128, 80);
-    const tex = new THREE.CanvasTexture(canvas);
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex }));
-    sprite.scale.set(3, 1.5, 1);
-    sprite.position.y = 1.2;
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({map: new THREE.CanvasTexture(canvas)}));
+    sprite.scale.set(3, 1.5, 1); sprite.position.y = 1.3;
     group.add(sprite);
-
     return group;
 }
 
 function loadQuestion() {
     targets.forEach(t => scene.remove(t.obj));
     targets = [];
-    
     const qData = config.questions[currentQ];
     document.getElementById('q-text').innerText = qData.q;
-    document.getElementById('q-num').innerText = currentQ + 1;
-
+    
     qData.a.forEach((ans, i) => {
         const obj = createUFO(ans);
-        const angle = (i / qData.a.length) * Math.PI * 2;
-        obj.position.set(Math.cos(angle)*15, (Math.random()-0.5)*5, Math.sin(angle)*15);
+        obj.position.set((Math.random()-0.5)*30, (Math.random()-0.5)*10, -15 - Math.random()*10);
         scene.add(obj);
-        targets.push({ obj, isCorrect: i === qData.c, offset: Math.random() * 10 });
+        targets.push({ obj, isCorrect: i === qData.c, dy: Math.random()*0.02, falling: false });
     });
 }
 
 function shoot() {
     if (audioCtx.state === 'suspended') audioCtx.resume();
-    playSound('shoot');
-    
+    playLaserSound();
+
+    // Визуал луча
+    const laserGeo = new THREE.CylinderGeometry(0.02, 0.02, 50);
+    const laserMat = new THREE.MeshBasicMaterial({color: 0x00f2ff});
+    const laser = new THREE.Mesh(laserGeo, laserMat);
+    laser.quaternion.copy(camera.quaternion);
+    laser.position.copy(camera.position);
+    laser.translateZ(-25);
+    laser.rotateX(Math.PI/2);
+    scene.add(laser);
+    setTimeout(() => scene.remove(laser), 50);
+
+    // Отдача пистолета
+    gun.position.y -= 0.1;
+
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(new THREE.Vector2(0,0), camera);
-    const intersects = raycaster.intersectObjects(scene.children, true);
+    const intersects = raycaster.intersectObjects(targets.map(t => t.obj), true);
 
     if(intersects.length > 0) {
         let hit = intersects[0].object;
         while(hit.parent && hit.type !== 'Group') hit = hit.parent;
-        
         const target = targets.find(t => t.obj === hit);
-        if(target && target.isCorrect) {
-            playSound('win');
-            currentQ++;
-            if(currentQ < config.questions.length) setTimeout(loadQuestion, 500);
-            else alert("МИССИЯ ЗАВЕРШЕНА!");
+        
+        if(target.isCorrect) {
+            target.falling = true;
+            setTimeout(() => {
+                currentQ = (currentQ + 1) % config.questions.length;
+                loadQuestion();
+            }, 1500);
+        } else {
+            // Ошибка - красное мигание
+            hit.children[0].material.color.set(0xff0000);
+            setTimeout(() => hit.children[0].material.color.set(0x666666), 500);
         }
     }
 }
@@ -169,18 +189,31 @@ function shoot() {
 function animate() {
     requestAnimationFrame(animate);
     const time = Date.now() * 0.001;
-    
-    targets.forEach((t, i) => {
-        // Плавное движение по кругу и покачивание
-        const speed = 0.5;
-        const radius = 15;
-        const angle = time * speed + (i * Math.PI * 2 / targets.length);
-        t.obj.position.x = Math.cos(angle) * radius;
-        t.obj.position.z = Math.sin(angle) * radius;
-        t.obj.position.y += Math.sin(time + t.offset) * 0.02;
-        t.obj.lookAt(0, t.obj.position.y, 0);
+
+    // Движение игрока
+    const speed = 0.1;
+    if(move.fwd) camera.translateZ(-speed);
+    if(move.bwd) camera.translateZ(speed);
+    if(move.left) camera.translateX(-speed);
+    if(move.right) camera.translateX(speed);
+
+    // Привязка пистолета к камере
+    gun.position.copy(camera.position);
+    gun.quaternion.copy(camera.quaternion);
+    gun.translateX(0.4); gun.translateY(-0.35); gun.translateZ(-0.8);
+    gun.position.y = THREE.MathUtils.lerp(gun.position.y, camera.position.y - 0.35, 0.1);
+
+    // Анимация НЛО
+    targets.forEach(t => {
+        if(t.falling) {
+            t.obj.position.y -= 0.2;
+            t.obj.rotation.z += 0.1;
+        } else {
+            t.obj.position.y += Math.sin(time + t.dy*100) * 0.01;
+            t.obj.lookAt(camera.position);
+        }
     });
-    
+
     renderer.render(scene, camera);
 }
 
