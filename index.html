@@ -3,210 +3,189 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Space Knowledge Shooter</title>
+    <title>Space Mission 360</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.umd.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        #hud {
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            pointer-events: none; color: white; text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
-        }
-        #question-box {
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+        #hud { position: absolute; width: 100%; height: 100%; pointer-events: none; }
+        #question-ui {
             position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
-            background: rgba(0, 0, 50, 0.7); padding: 15px 30px; border: 2px solid #00d4ff;
-            border-radius: 10px; text-align: center; max-width: 80%; pointer-events: auto;
+            background: rgba(0, 20, 50, 0.8); border: 2px solid #00f2ff;
+            padding: 20px; border-radius: 15px; color: white; text-align: center;
+            min-width: 300px; box-shadow: 0 0 20px #00f2ff66;
         }
-        #stats { position: absolute; bottom: 20px; left: 20px; font-size: 1.2rem; }
         #crosshair {
-            position: absolute; top: 50%; left: 50%; width: 30px; height: 30px;
-            border: 2px solid rgba(0, 212, 255, 0.5); border-radius: 50%;
-            transform: translate(-50%, -50%);
+            position: absolute; top: 50%; left: 50%; width: 40px; height: 40px;
+            border: 2px solid #00f2ff; border-radius: 50%; transform: translate(-50%, -50%);
         }
-        #crosshair::after {
-            content: ''; position: absolute; top: 50%; left: 50%;
-            width: 4px; height: 4px; background: red; border-radius: 50%;
-            transform: translate(-50%, -50%);
-        }
+        #crosshair::before { content: ''; position: absolute; top: 50%; left: 50%; width: 2px; height: 10px; background: #00f2ff; transform: translate(-50%, -50%); }
+        #crosshair::after { content: ''; position: absolute; top: 50%; left: 50%; width: 10px; height: 2px; background: #00f2ff; transform: translate(-50%, -50%); }
     </style>
 </head>
 <body>
 
 <div id="hud">
-    <div id="question-box">
-        <div id="question-text">Загрузка миссии...</div>
+    <div id="question-ui">
+        <div style="font-size: 0.8em; color: #00f2ff;">МИССИЯ: ВОПРОС <span id="q-num">1</span></div>
+        <div id="q-text" style="font-size: 1.4em; margin-top: 5px;">Загрузка...</div>
     </div>
-    <div id="stats">Цель: <span id="current-task">0</span>/<span id="total-tasks">0</span> | Очки: <span id="score">0</span></div>
     <div id="crosshair"></div>
 </div>
 
 <script>
-/** * НАСТРОЙКИ (будут передаваться из редактора)
- */
-const gameConfig = {
-    speed: 0.005,           // Скорость вращения тарелок
-    hitboxRadius: 2,       // Размер НЛО
-    targetSkin: 'ufo',     // Скин (пока зарезервировано)
-    primaryColor: '#00d4ff',
+const config = {
     questions: [
-        { q: "Сколько планет в Солнечной системе?", a: ["7", "8", "9", "10"], correct: 1 },
-        { q: "Решите уравнение: $x + 5 = 12$", a: ["5", "6", "7", "8"], correct: 2 },
-        { q: "Ближайшая к нам звезда?", a: ["Сириус", "Проксима Центавра", "Вега"], correct: 1 }
+        { q: "Сколько планет в Солнечной системе?", a: ["7", "8", "9", "6"], c: 1 },
+        { q: "Какая планета красная?", a: ["Венера", "Марс", "Юпитер"], c: 1 },
+        { q: "2 + 2 * 2 = ?", a: ["8", "6", "4"], c: 1 }
     ]
 };
 
-let scene, camera, renderer, raycaster;
-let targets = [];
-let currentLevel = 0;
-let score = 0;
-const mouse = new THREE.Vector2();
+let scene, camera, renderer, currentQ = 0, targets = [];
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+function playSound(type) {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    
+    if(type === 'shoot') {
+        osc.type = 'triangle'; osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(10, audioCtx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.1);
+    } else if(type === 'win') {
+        osc.type = 'sine'; osc.frequency.setValueAtTime(400, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(800, audioCtx.currentTime + 0.2);
+        gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.3);
+    }
+    osc.start(); osc.stop(audioCtx.currentTime + 0.3);
+}
 
 function init() {
     scene = new THREE.Scene();
-    // Фон: Звездное небо
-    scene.background = new THREE.Color(0x000005);
-    
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(renderer.domElement);
 
-    raycaster = new THREE.Raycaster();
+    // Звездное небо
+    const starGeo = new THREE.BufferGeometry();
+    const starCoords = [];
+    for(let i=0; i<5000; i++) {
+        starCoords.push((Math.random()-0.5)*1000, (Math.random()-0.5)*1000, (Math.random()-0.5)*1000);
+    }
+    starGeo.setAttribute('position', new THREE.Float32BufferAttribute(starCoords, 3));
+    const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.7 });
+    scene.add(new THREE.Points(starGeo, starMat));
 
-    // Освещение
-    const light = new THREE.PointLight(0xffffff, 1, 100);
-    light.position.set(0, 0, 0);
-    scene.add(light);
-    scene.add(new THREE.AmbientLight(0x404040));
+    // Свет
+    scene.add(new THREE.AmbientLight(0x404040, 2));
+    const sun = new THREE.DirectionalLight(0xffffff, 1);
+    sun.position.set(5, 5, 5);
+    scene.add(sun);
 
-    window.addEventListener('mousedown', onShoot);
-    window.addEventListener('mousemove', onMouseMove);
-    
-    loadLevel();
+    window.addEventListener('mousedown', shoot);
+    window.addEventListener('mousemove', e => {
+        if (document.pointerLockElement) {
+            camera.rotation.y -= e.movementX * 0.002;
+            camera.rotation.x -= e.movementY * 0.002;
+        }
+    });
+
+    loadQuestion();
     animate();
 }
 
-function loadLevel() {
-    // Очистка старых целей
-    targets.forEach(t => scene.remove(t.mesh));
-    targets = [];
-
-    const data = gameConfig.questions[currentLevel];
-    document.getElementById('question-text').innerText = data.q;
-    document.getElementById('current-task').innerText = currentLevel + 1;
-    document.getElementById('total-tasks').innerText = gameConfig.questions.length;
-
-    // Спавн НЛО вокруг игрока
-    data.a.forEach((text, index) => {
-        const phi = Math.acos(-1 + (2 * index) / data.a.length);
-        const theta = Math.sqrt(data.a.length * Math.PI) * phi;
-        
-        const mesh = createUFO(text);
-        const dist = 15;
-        mesh.position.set(
-            dist * Math.cos(theta) * Math.sin(phi),
-            dist * Math.sin(theta) * Math.sin(phi),
-            dist * Math.cos(phi)
-        );
-        
-        scene.add(mesh);
-        targets.push({ mesh, isCorrect: index === data.correct });
-    });
-}
-
-function createUFO(label) {
+function createUFO(text) {
     const group = new THREE.Group();
     
-    // Геометрия тарелки
-    const geo = new THREE.CylinderGeometry(2, 2, 0.5, 32);
-    const mat = new THREE.MeshPhongMaterial({ color: 0x888888, emissive: 0x111111 });
-    const ufo = new THREE.Mesh(geo, mat);
-    group.add(ufo);
+    // Корпус НЛО
+    const body = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.5, 1.5, 0.4, 32),
+        new THREE.MeshPhongMaterial({ color: 0x555555, shininess: 100 })
+    );
+    const dome = new THREE.Mesh(
+        new THREE.SphereGeometry(0.7, 32, 32, 0, Math.PI*2, 0, Math.PI/2),
+        new THREE.MeshPhongMaterial({ color: 0x00d4ff, transparent: true, opacity: 0.6 })
+    );
+    dome.position.y = 0.2;
+    group.add(body, dome);
 
-    // Добавляем текст (упрощенно через Canvas-текстуру)
+    // Текст
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     canvas.width = 256; canvas.height = 128;
-    ctx.fillStyle = 'white';
-    ctx.font = 'Bold 40px Arial';
-    ctx.textAlign = 'center';
-    ctx.fillText(label, 128, 70);
-    
-    const texture = new THREE.CanvasTexture(canvas);
-    const spriteMat = new THREE.SpriteMaterial({ map: texture });
-    const sprite = new THREE.Sprite(spriteMat);
-    sprite.scale.set(4, 2, 1);
-    sprite.position.y = 1.5;
+    ctx.fillStyle = '#00f2ff'; ctx.font = 'bold 50px Arial'; ctx.textAlign = 'center';
+    ctx.fillText(text, 128, 80);
+    const tex = new THREE.CanvasTexture(canvas);
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex }));
+    sprite.scale.set(3, 1.5, 1);
+    sprite.position.y = 1.2;
     group.add(sprite);
 
     return group;
 }
 
-function onMouseMove(event) {
-    // Вращение камеры мышью
-    const factor = 0.002;
-    camera.rotation.y -= event.movementX * factor;
-    camera.rotation.x -= event.movementY * factor;
+function loadQuestion() {
+    targets.forEach(t => scene.remove(t.obj));
+    targets = [];
+    
+    const qData = config.questions[currentQ];
+    document.getElementById('q-text').innerText = qData.q;
+    document.getElementById('q-num').innerText = currentQ + 1;
+
+    qData.a.forEach((ans, i) => {
+        const obj = createUFO(ans);
+        const angle = (i / qData.a.length) * Math.PI * 2;
+        obj.position.set(Math.cos(angle)*15, (Math.random()-0.5)*5, Math.sin(angle)*15);
+        scene.add(obj);
+        targets.push({ obj, isCorrect: i === qData.c, offset: Math.random() * 10 });
+    });
 }
 
-function onShoot(event) {
-    // Центр экрана (прицел)
+function shoot() {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    playSound('shoot');
+    
+    const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(new THREE.Vector2(0,0), camera);
-    const intersects = raycaster.intersectObjects(targets.map(t => t.mesh), true);
+    const intersects = raycaster.intersectObjects(scene.children, true);
 
-    if (intersects.length > 0) {
-        const hitMesh = intersects[0].object.parent; 
-        const targetData = targets.find(t => t.mesh === hitMesh);
-
-        if (targetData.isCorrect) {
-            handleSuccess(hitMesh);
-        } else {
-            handleError(hitMesh);
+    if(intersects.length > 0) {
+        let hit = intersects[0].object;
+        while(hit.parent && hit.type !== 'Group') hit = hit.parent;
+        
+        const target = targets.find(t => t.obj === hit);
+        if(target && target.isCorrect) {
+            playSound('win');
+            currentQ++;
+            if(currentQ < config.questions.length) setTimeout(loadQuestion, 500);
+            else alert("МИССИЯ ЗАВЕРШЕНА!");
         }
     }
 }
 
-function handleSuccess(mesh) {
-    score += 100;
-    document.getElementById('score').innerText = score;
-    // Эффект взрыва (простое удаление для начала)
-    scene.remove(mesh);
-    
-    setTimeout(() => {
-        currentLevel++;
-        if (currentLevel < gameConfig.questions.length) {
-            loadLevel();
-        } else {
-            alert("Миссия выполнена! Очки: " + score);
-        }
-    }, 1000);
-}
-
-function handleError(mesh) {
-    // Визуальный отклик на ошибку
-    mesh.children[0].material.emissive.setHex(0xff0000);
-    setTimeout(() => mesh.children[0].material.emissive.setHex(0x111111), 500);
-}
-
 function animate() {
     requestAnimationFrame(animate);
-    TWEEN.update();
+    const time = Date.now() * 0.001;
     
-    // Вращение тарелок вокруг центра
     targets.forEach((t, i) => {
-        const time = Date.now() * gameConfig.speed;
-        t.mesh.position.x += Math.sin(time + i) * 0.02;
-        t.mesh.position.y += Math.cos(time + i) * 0.02;
-        t.mesh.lookAt(0,0,0);
+        // Плавное движение по кругу и покачивание
+        const speed = 0.5;
+        const radius = 15;
+        const angle = time * speed + (i * Math.PI * 2 / targets.length);
+        t.obj.position.x = Math.cos(angle) * radius;
+        t.obj.position.z = Math.sin(angle) * radius;
+        t.obj.position.y += Math.sin(time + t.offset) * 0.02;
+        t.obj.lookAt(0, t.obj.position.y, 0);
     });
-
+    
     renderer.render(scene, camera);
 }
 
+document.body.addEventListener('click', () => document.body.requestPointerLock());
 init();
-
-// Запрос на блокировку указателя для управления как в FPS
-document.body.onclick = () => document.body.requestPointerLock();
 </script>
 </body>
 </html>
